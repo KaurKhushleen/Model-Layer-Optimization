@@ -3,109 +3,113 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import redis
-import os
 import json
+import os
 from dotenv import load_dotenv
 from groq import Groq
 import time
 
+
 load_dotenv()
 
-app = FastAPI(title = "Model Optimization Layer")
+
+app = FastAPI(title="NeuralCache API")
+
 
 app.add_middleware(
-  CORSMiddleware,
-  allow_origins=["*"],
-  allow_credentials=True, 
-  allow_methods=["*"],
-  allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],  
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-print("Loading model...")
+print("Loading embedding model...")
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("Model loaded.")
+print("Model loaded!")
 
 redis_client = redis.Redis(
-  host = os.getenv("REDIS_HOST", "localhost"),
-  port = int(os.getenv("REDIS_PORT", 6379)),
-  decode_responses = True
+    host=os.getenv('REDIS_HOST', 'localhost'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    decode_responses=True
 )
 
-#Redis COnnection
 try:
-  redis_client.ping()
-  print("Connected to Redis")
-except redis.exceptions.ConnectionError as e:
-  print("Redis connection error:", e)
+    redis_client.ping()
+    print("Connected to Redis")
+except Exception as e:
+    print(f"Redis connection failed: {e}")
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-similarity_threshold = 0.85
+SIMILARITY_THRESHOLD = 0.85 
 
 metrics = {
-  "total_requests": 0,
-  "cache_hits": 0,
-  "cache_misses": 0,
-  "groq_requests": 0,
-  "total_api_cost_saved" : 0.0
+    "total_requests": 0,
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "total_api_cost_saved": 0.0
 }
 
 def cosine_similarity(vec1, vec2):
-  return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
 
-def check_cache(query_embedding):
-  cached_keys = redis_client.keys("embedding:*")
 
-  if not cached_keys:
-    return None
-  
-  max_similarity = 0
-  best_match = None
-
-  for key in cached_keys:
-    cached_data = redis_client.get(key)
-    if not cached_data:
-      continue
-
-    cached_obj = json.loads(cached_data)
-    cached_embedding = np.array(cached_obj["embedding"])
-
-    similarity = cosine_similarity(query_embedding, cached_embedding)
-
-    if similarity > max_similarity:
-      max_similarity = similarity
-      best_match = cached_obj
-
-  if max_similarity >= similarity_threshold:
-    return {
-      "response" : best_match["response"],
-      "similarity" : max_similarity,
-      "original_query" : best_match["query"]
-    }
-  
-def call_llm(query):
-  try:
-    response = groq_client.chat.completions.create(
-      messages = [
-        {
-          "role": "system",
-          "content": "You are a helpful assistant. Provide concise, accurate answers."
-        },
-        {
-          "role": "user",
-          "content": query
+def check_cache(query_embedding, query_text):
+    cached_keys = redis_client.keys("embedding:*")
+    
+    if not cached_keys:
+        return None
+    
+    max_similarity = 0
+    best_match = None
+    
+    for key in cached_keys:
+        cached_data = redis_client.get(key)
+        if not cached_data:
+            continue
+            
+        cached_obj = json.loads(cached_data)
+        cached_embedding = np.array(cached_obj["embedding"])
+        
+        similarity = cosine_similarity(query_embedding, cached_embedding)
+        
+        if similarity > max_similarity:
+            max_similarity = similarity
+            best_match = cached_obj
+    
+    if max_similarity >= SIMILARITY_THRESHOLD:
+        return {
+            "response": best_match["response"],
+            "similarity": float(max_similarity),
+            "original_query": best_match["query"]
         }
-      ],
-      model="llama3-8b-8192",
-      temperature=0.7,
-      max_tokens=500
-    )
+    
+    return None
 
-    return response
-  except Exception as e:
-    return f"Error calling Groq LLM: {str(e)}"
-  
-  def store_in_cache(query, query_embedding, response):
+def call_llm(query):
+    try:
+        response = groq_client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Provide concise, accurate answers."
+                },
+                {
+                    "role": "user",
+                    "content": query
+                }
+            ],
+            model= "llama-3.1-8b-instant",
+            temperature=0.7,
+            max_tokens=500
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"Error calling LLM: {str(e)}"
+
+
+def store_in_cache(query, embedding, response):
     cache_key = f"embedding:{abs(hash(query))}"
     
     cache_data = {
@@ -115,3 +119,100 @@ def call_llm(query):
     }
     
     redis_client.set(cache_key, json.dumps(cache_data))
+
+# API Endpoints
+@app.get("/")
+async def root():
+    
+    return {
+        "status": "API Running",
+        "endpoints": ["/query", "/stats", "/cache/clear", "/cache/list"]
+    }
+
+@app.post("/query")
+async def process_query(request: dict):
+    """
+    Main endpoint: Process a query with caching
+    
+    Request body: {"query": "Your question here"}
+    """
+    start_time = time.time()
+    
+    query = request.get("query", "").strip()
+    if not query:
+        return {"error": "Query cannot be empty"}
+    
+    metrics["total_requests"] += 1
+    
+    query_embedding = embedding_model.encode(query)
+    
+    cached_result = check_cache(query_embedding, query)
+    
+    if cached_result:
+
+        metrics["cache_hits"] += 1
+        
+        response_time = (time.time() - start_time) * 1000
+        
+        return {
+            "response": cached_result["response"],
+            "from_cache": True,
+            "similarity": round(cached_result["similarity"], 4),
+            "original_query": cached_result["original_query"],
+            "response_time_ms": round(response_time, 2)
+        }
+    
+    # Step 3: Cache miss - call LLM
+    metrics["cache_misses"] += 1
+    llm_response = call_llm(query)
+    
+    # Step 4: Store in cache
+    store_in_cache(query, query_embedding, llm_response)
+    
+    response_time = (time.time() - start_time) * 1000
+    
+    return {
+        "response": llm_response,
+        "from_cache": False,
+        "response_time_ms": round(response_time, 2)
+    }
+
+@app.get("/stats")
+async def get_stats():
+    """Get cache statistics"""
+    total_cached = len(redis_client.keys("embedding:*"))
+    cache_hit_rate = (metrics["cache_hits"] / metrics["total_requests"] * 100) if metrics["total_requests"] > 0 else 0
+     
+    return {
+        "total_requests": metrics["total_requests"],
+        "cache_hits": metrics["cache_hits"],
+        "cache_misses": metrics["cache_misses"],
+        "cache_hit_rate": round(cache_hit_rate, 2),
+        "total_cached_queries": total_cached,
+    }
+
+@app.delete("/cache/clear")
+async def clear_cache():
+    redis_client.flushdb()
+    return {"message": "Cache cleared successfully"}
+
+@app.get("/cache/list")
+async def list_cached():
+    keys = redis_client.keys("embedding:*")
+    queries = []
+    
+    for key in keys[:20]: 
+        data = json.loads(redis_client.get(key))
+        queries.append({
+            "query": data["query"],
+            "response_preview": data["response"][:100] + "..." if len(data["response"]) > 100 else data["response"]
+        })
+    
+    return {
+        "cached_queries": queries,
+        "total_count": len(keys)
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
