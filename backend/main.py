@@ -13,7 +13,7 @@ import time
 load_dotenv()
 
 
-app = FastAPI(title="NeuralCache API")
+app = FastAPI(title="Model Layer Optimization")
 
 
 app.add_middleware(
