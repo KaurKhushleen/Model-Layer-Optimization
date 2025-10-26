@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Send, Zap, Database, TrendingUp, Trash2, List } from 'lucide-react';
 import './App.css';
 
-const API_URL = 'http://localhost:8000';
+const API_URL = 'https://model-layer-optimization.onrender.com/';
 
 function App() {
   const [query, setQuery] = useState('');
