@@ -58,7 +58,7 @@ except Exception as e:
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-SIMILARITY_THRESHOLD = 0.85 
+SIMILARITY_THRESHOLD = 0.8
 
 metrics = {
     "total_requests": 0,
@@ -90,10 +90,13 @@ def check_cache(query_embedding, query_text):
         
         similarity = cosine_similarity(query_embedding, cached_embedding)
         
+        print(f"Similarity between '{cached_obj['query']}' and '{query_text}': {similarity:.4f}")
         if similarity > max_similarity:
             max_similarity = similarity
             best_match = cached_obj
     
+    
+
     if max_similarity >= SIMILARITY_THRESHOLD:
         return {
             "response": best_match["response"],
@@ -134,8 +137,8 @@ def store_in_cache(query, embedding, response):
         "response": response
     }
     
-    redis_client.set(cache_key, 3 * 24 * 3600, json.dumps(cache_data))
-    # expiry in 7 days
+    redis_client.setex(cache_key, 3 * 24 * 3600, json.dumps(cache_data))
+    # expiry in 3 days
 
 # API Endpoints
 @app.get("/")
@@ -180,11 +183,11 @@ async def process_query(request: dict):
             "response_time_ms": round(response_time, 2)
         }
     
-    # Step 3: Cache miss - call LLM
+    
     metrics["cache_misses"] += 1
     llm_response = call_llm(query)
     
-    # Step 4: Store in cache
+    
     store_in_cache(query, query_embedding, llm_response)
     
     response_time = (time.time() - start_time) * 1000
