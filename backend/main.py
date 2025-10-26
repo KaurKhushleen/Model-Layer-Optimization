@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import redis
+from urllib.parse import urlparse #To parse Redis URL into parts like hostname, port & password
 import json
 import os
 from dotenv import load_dotenv
@@ -28,10 +29,16 @@ print("Loading embedding model...")
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 print("Model loaded!")
 
+redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+url = urlparse(redis_url)
+
 redis_client = redis.Redis(
-    host=os.getenv('REDIS_HOST', 'localhost'),
-    port=int(os.getenv('REDIS_PORT', 6379)),
-    decode_responses=True
+    host = url.hostname or 'localhost',
+    port= url.port or 6379,
+    password= url.password,
+    decode_responses=True,
+    socket_connect_timeout = 10,
+    socket_timeout = 10
 )
 
 try:
