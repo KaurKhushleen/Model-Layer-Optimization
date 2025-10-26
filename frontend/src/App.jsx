@@ -3,7 +3,7 @@ import axios from 'axios';
 import { Send, Zap, Database, TrendingUp, Trash2, List } from 'lucide-react';
 import './App.css';
 
-const API_URL = 'https://model-layer-optimization.onrender.com/';
+const API_URL = 'https://model-layer-optimization.onrender.com';
 
 function App() {
   const [query, setQuery] = useState('');
@@ -49,7 +49,7 @@ function App() {
       fetchMetrics();
     } catch (error) {
       console.error('Error:', error);
-      alert('Error processing query. Make sure backend is running on http://localhost:8000');
+      alert('Error processing query. Make sure backend is running');
     } finally {
       setLoading(false);
     }
