@@ -25,9 +25,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-print("Loading embedding model...")
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-print("Model loaded!")
+
+#embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+#Optimising oading time & memory by lazy loading
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        print("Loading embedding model")
+        embedding_model = SentenceTransformer("paraphrase-MiniLM-L3-v2") 
+        print("Model loaded!")
+    return embedding_model
 
 redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
 url = urlparse(redis_url)
@@ -125,7 +134,8 @@ def store_in_cache(query, embedding, response):
         "response": response
     }
     
-    redis_client.set(cache_key, json.dumps(cache_data))
+    redis_client.set(cache_key, 3 * 24 * 3600, json.dumps(cache_data))
+    # expiry in 7 days
 
 # API Endpoints
 @app.get("/")
@@ -151,7 +161,8 @@ async def process_query(request: dict):
     
     metrics["total_requests"] += 1
     
-    query_embedding = embedding_model.encode(query)
+    query_embedding = get_embedding_model().encode(query)
+
     
     cached_result = check_cache(query_embedding, query)
     
